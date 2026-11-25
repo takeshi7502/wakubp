@@ -1,0 +1,17 @@
+# OS & Editor artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Temporary / local backup or log files
+*.log
+*.tmp
+*.bak
+backup-*/
+install-manifest.json
+
