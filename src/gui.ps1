@@ -82,6 +82,10 @@ $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
 $form.ClientSize = New-Object System.Drawing.Size(480, 520)
+$IconFile = Join-Path $PSScriptRoot "waku.ico"
+if (Test-Path -LiteralPath $IconFile -PathType Leaf) {
+    try { $form.Icon = New-Object System.Drawing.Icon($IconFile) } catch {}
+}
 
 # --- header ----------------------------------------------------------------------
 $header = New-Object System.Windows.Forms.Panel

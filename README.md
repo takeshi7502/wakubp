@@ -15,6 +15,7 @@ wakubp/
 ├── .gitignore             # Git ignore rules
 ├── .gitattributes         # Line-ending rules (CRLF for Windows scripts, LF for docs)
 ├── src/                   # Application engine & UI scripts
+│   ├── build-exe.ps1      # Compiles the entire repo into a standalone single-file wakubp.exe
 │   ├── launch.vbs         # WSH helper to spawn GUI without PowerShell console flash
 │   ├── gui.ps1            # WinForms GUI front-end
 │   └── engine.ps1         # Core installer & backup manifest engine
@@ -29,9 +30,14 @@ wakubp/
 
 ---
 
-## Quick Launch
+## Quick Launch & Single-File `.exe` Build
 
-Double-click **`wakubp.bat`** to open the menu.
+- **Run from folder:** Double-click **`wakubp.bat`** to open the menu.
+- **Build standalone single-file `.exe` (for easy sharing):**
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\src\build-exe.ps1
+  ```
+  Produces **`dist\wakubp.exe`** (~45 KB) with all `src\` and `payload\` files GZip-compressed inside. You can share **`wakubp.exe`** alone as a single file without any accompanying folders.
 
 **Menu Layout & Live Status:**
 - Each row's **left accent bar and number turn green** when that app's bypass is currently installed, and revert to blue when removed.
