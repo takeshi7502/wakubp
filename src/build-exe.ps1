@@ -7,19 +7,36 @@
 # ==============================================================================
 
 param(
-    [string]$IconSource = ""
+    [string]$IconSource = "",
+    [string]$Version = "",
+    [string]$Notes = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 Add-Type -AssemblyName System.Drawing
 
-$SrcDir  = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-$RootDir = Split-Path $SrcDir -Parent
-$DistDir = Join-Path $RootDir "dist"
-$OutExe  = Join-Path $DistDir "wakubp.exe"
-$IcoPath = Join-Path $SrcDir "waku.ico"
-$JpgPath = Join-Path $SrcDir "waku.jpg"
+$SrcDir      = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$RootDir     = Split-Path $SrcDir -Parent
+$DistDir     = Join-Path $RootDir "dist"
+$OutExe      = Join-Path $DistDir "wakubp.exe"
+$IcoPath     = Join-Path $SrcDir "waku.ico"
+$JpgPath     = Join-Path $SrcDir "waku.jpg"
+$VersionFile = Join-Path $RootDir "version.json"
+
+$VerMeta = [pscustomobject]@{
+    version     = "1.0.0"
+    notes       = "Initial release"
+    downloadUrl = "https://github.com/takeshi7502/wakubp/releases/latest/download/wakubp.exe"
+    sha256      = ""
+}
+if (Test-Path -LiteralPath $VersionFile -PathType Leaf) {
+    try { $VerMeta = Get-Content -LiteralPath $VersionFile -Raw | ConvertFrom-Json } catch {}
+}
+if ($Version) { $VerMeta.version = $Version }
+if ($Notes)   { $VerMeta.notes = $Notes }
+$BuildVer = "$($VerMeta.version)"
+$AsmVer   = if ($BuildVer -match '^\d+\.\d+\.\d+$') { "$BuildVer.0" } else { "2.1.0.0" }
 
 if (-not (Test-Path -LiteralPath $DistDir -PathType Container)) {
     New-Item -ItemType Directory -Path $DistDir -Force | Out-Null
@@ -147,7 +164,9 @@ Get-ChildItem -LiteralPath $PayloadRoot -Recurse -File | ForEach-Object {
     $FilesToPack += @{ Rel = $rel; Full = $_.FullName }
 }
 
-# Build compressed bundle in memory
+if (Test-Path -LiteralPath $VersionFile -PathType Leaf) {
+    $FilesToPack += @{ Rel = "version.json"; Full = $VersionFile }
+}
 $ms = New-Object System.IO.MemoryStream
 $gz = New-Object System.IO.Compression.GZipStream($ms, [System.IO.Compression.CompressionMode]::Compress, $true)
 $bw = New-Object System.IO.BinaryWriter($gz, [System.Text.Encoding]::UTF8)
@@ -177,12 +196,13 @@ using System.Text;
 [assembly: AssemblyDescription("wakubp - Bypass by waku on Teyvat")]
 [assembly: AssemblyProduct("wakubp")]
 [assembly: AssemblyCopyright("Copyright (c) 2026 waku")]
-[assembly: AssemblyVersion("2.0.0.0")]
-[assembly: AssemblyFileVersion("2.0.0.0")]
+[assembly: AssemblyVersion("$AsmVer")]
+[assembly: AssemblyFileVersion("$AsmVer")]
 
 namespace WakuBp {
     internal static class Program {
         private const string PayloadB64 = "$BundleB64";
+        private const string AppVersion = "$BuildVer";
 
         [STAThread]
         private static int Main(string[] args) {
@@ -198,6 +218,9 @@ namespace WakuBp {
                 psi.UseShellExecute = false;
                 psi.CreateNoWindow = true;
                 psi.WindowStyle = ProcessWindowStyle.Hidden;
+                psi.EnvironmentVariables["WAKUBP_EXE_PATH"] = Assembly.GetExecutingAssembly().Location;
+                psi.EnvironmentVariables["WAKUBP_VERSION"]  = AppVersion;
+                psi.EnvironmentVariables["WAKUBP_PID"]      = Process.GetCurrentProcess().Id.ToString();
 
                 using (Process p = Process.Start(psi)) {
                     if (p != null) {
@@ -256,5 +279,9 @@ if ($results.Errors.HasErrors) {
     exit 1
 }
 
+$exeHash = (Get-FileHash -LiteralPath $OutExe -Algorithm SHA256).Hash.ToLowerInvariant()
+$VerMeta.sha256 = $exeHash
+$VerMeta | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $VersionFile -Encoding UTF8
+
 $sizeKb = [Math]::Round((Get-Item -LiteralPath $OutExe).Length / 1KB, 1)
-Write-Host "[+] Built standalone executable: $OutExe ($sizeKb KB, $($FilesToPack.Count) embedded files, icon: $(Test-Path -LiteralPath $IcoPath))"
+Write-Host "[+] Built standalone executable: $OutExe ($sizeKb KB, v$BuildVer, sha256: $($exeHash.Substring(0,12))..., $($FilesToPack.Count) embedded files, icon: $(Test-Path -LiteralPath $IcoPath))"

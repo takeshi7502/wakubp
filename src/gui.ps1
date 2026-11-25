@@ -122,6 +122,191 @@ $header.Add_Paint({
 })
 $form.Controls.Add($header)
 
+# --- updater badge & logic -------------------------------------------------------
+$RootDirLocal = Split-Path $PSScriptRoot -Parent
+$LocalVerFile = Join-Path $RootDirLocal "version.json"
+$LocalVersion = if ($env:WAKUBP_VERSION) { $env:WAKUBP_VERSION } else { "1.0.0" }
+if ((-not $env:WAKUBP_VERSION) -and (Test-Path -LiteralPath $LocalVerFile -PathType Leaf)) {
+    try { $LocalVersion = "$((Get-Content -LiteralPath $LocalVerFile -Raw | ConvertFrom-Json).version)" } catch {}
+}
+$UpdateManifestUrl = "https://raw.githubusercontent.com/takeshi7502/wakubp/master/version.json"
+$script:RemoteUpdate = $null
+
+$btnUpdate = New-Object System.Windows.Forms.Button
+$btnUpdate.Location = New-Object System.Drawing.Point(344, 28)
+$btnUpdate.Size = New-Object System.Drawing.Size(116, 26)
+$btnUpdate.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+$btnUpdate.FlatAppearance.BorderSize = 0
+$btnUpdate.BackColor = $Surface
+$btnUpdate.Cursor = [System.Windows.Forms.Cursors]::Hand
+$btnUpdate.Text = ""
+$btnUpdate.Tag = @{ Text = "v$LocalVersion"; HasUpdate = $false; Hover = $false; Checking = $false }
+$btnUpdate.Add_Paint({
+    param($s, $e)
+    $tag = $s.Tag
+    $g = $e.Graphics
+    $bg = if ($tag.HasUpdate) {
+        if ($tag.Hover) { [System.Drawing.Color]::FromArgb(26, 72, 46) } else { [System.Drawing.Color]::FromArgb(18, 52, 34) }
+    } else {
+        if ($tag.Hover) { $Hover } else { $Surface }
+    }
+    $fill = New-Object System.Drawing.SolidBrush($bg)
+    $g.FillRectangle($fill, 0, 0, $s.Width, $s.Height)
+    $fill.Dispose()
+    $borderCol = if ($tag.HasUpdate) { $GreenGlow } else { $Divider }
+    $pen = New-Object System.Drawing.Pen($borderCol, 1)
+    $g.DrawRectangle($pen, 0, 0, ($s.Width - 1), ($s.Height - 1))
+    $pen.Dispose()
+    $fg = if ($tag.HasUpdate) { $GreenGlow } elseif ($tag.Hover) { $Cyan } else { $Muted }
+    $fnt = New-Object System.Drawing.Font("Consolas", 8.5, [System.Drawing.FontStyle]::Bold)
+    $flags = [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter
+    [System.Windows.Forms.TextRenderer]::DrawText($g, $tag.Text, $fnt, (New-Object System.Drawing.Rectangle(0, 0, $s.Width, $s.Height)), $fg, $flags)
+    $fnt.Dispose()
+})
+$btnUpdate.Add_MouseEnter({ param($s, $e) $s.Tag.Hover = $true; $s.Invalidate() })
+$btnUpdate.Add_MouseLeave({ param($s, $e) $s.Tag.Hover = $false; $s.Invalidate() })
+$header.Controls.Add($btnUpdate)
+
+function Compare-SemVer([string]$a, [string]$b) {
+    try { return ([version]($a.TrimStart('v'))).CompareTo([version]($b.TrimStart('v'))) }
+    catch { return [string]::Compare($a, $b, $true) }
+}
+
+function Invoke-SelfUpdate($info) {
+    $exePath = $env:WAKUBP_EXE_PATH
+    if (-not $exePath) {
+        Say "   [=] Running from source (.bat). Run 'git pull' to update."
+        return
+    }
+    $msg = "New version v$($info.version) is available (current: v$LocalVersion).`n`nChanges: $($info.notes)`n`nDownload and update now?"
+    if (-not (Confirm $msg "y")) { return }
+
+    Say "   [=] Downloading wakubp v$($info.version)..."
+    $tmpExe = Join-Path ([System.IO.Path]::GetTempPath()) "wakubp-update.exe"
+    try {
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+        $wc = New-Object System.Net.WebClient
+        $wc.Headers.Add("User-Agent", "wakubp/$LocalVersion")
+        $wc.DownloadFile($info.downloadUrl, $tmpExe)
+        $wc.Dispose()
+    } catch {
+        Say "   [!] Download failed: $($_.Exception.Message)"
+        return
+    }
+
+    if ($info.sha256) {
+        $actual = (Get-FileHash -LiteralPath $tmpExe -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -ne $info.sha256.ToLowerInvariant()) {
+            Remove-Item -LiteralPath $tmpExe -Force -ErrorAction SilentlyContinue
+            Say "   [!] SHA-256 mismatch! Update aborted for safety."
+            return
+        }
+    }
+
+    Say "   [+] Verified. Applying update and restarting..."
+    $parentPid = if ($env:WAKUBP_PID) { $env:WAKUBP_PID } else { $PID }
+    $swapScript = Join-Path ([System.IO.Path]::GetTempPath()) "wakubp-swap.ps1"
+    $swapBody = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+for (`$i = 0; `$i -lt 40; `$i++) {
+    if (-not (Get-Process -Id $parentPid)) { break }
+    Start-Sleep -Milliseconds 150
+}
+for (`$i = 0; `$i -lt 20; `$i++) {
+    try {
+        Copy-Item -LiteralPath '$($tmpExe.Replace("'","''"))' -Destination '$($exePath.Replace("'","''"))' -Force -ErrorAction Stop
+        Remove-Item -LiteralPath '$($tmpExe.Replace("'","''"))' -Force
+        Start-Process -FilePath '$($exePath.Replace("'","''"))'
+        break
+    } catch {
+        Start-Sleep -Milliseconds 200
+    }
+}
+Remove-Item -LiteralPath '$($swapScript.Replace("'","''"))' -Force
+"@
+    Set-Content -LiteralPath $swapScript -Value $swapBody -Encoding UTF8
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "powershell.exe"
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$swapScript`""
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    [System.Diagnostics.Process]::Start($psi) | Out-Null
+    $form.Close()
+}
+
+function Start-UpdateCheck([bool]$interactive = $false) {
+    if ($btnUpdate.Tag.Checking) { return }
+    $btnUpdate.Tag.Checking = $true
+    if ($interactive) {
+        $btnUpdate.Tag.Text = "Checking..."
+        $btnUpdate.Invalidate()
+    }
+    $script:UpdPs = [powershell]::Create()
+    $script:UpdPs.AddScript({
+        param($url, $ver)
+        try {
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+            $req = [System.Net.HttpWebRequest]::Create($url)
+            $req.Timeout = 3500
+            $req.UserAgent = "wakubp/$ver"
+            $resp = $req.GetResponse()
+            $sr = New-Object System.IO.StreamReader($resp.GetResponseStream())
+            $raw = $sr.ReadToEnd()
+            $sr.Close()
+            $resp.Close()
+            return @{ ok = $true; json = $raw }
+        } catch {
+            return @{ ok = $false; err = $_.Exception.Message }
+        }
+    }).AddArgument($UpdateManifestUrl).AddArgument($LocalVersion) | Out-Null
+    $script:UpdAsync = $script:UpdPs.BeginInvoke()
+
+    if ($script:UpdTimer) {
+        try { $script:UpdTimer.Stop(); $script:UpdTimer.Dispose() } catch {}
+    }
+    $script:UpdTimer = New-Object System.Windows.Forms.Timer
+    $script:UpdTimer.Interval = 150
+    $script:UpdTimer.Add_Tick({
+        if (-not $script:UpdAsync -or -not $script:UpdAsync.IsCompleted) { return }
+        $script:UpdTimer.Stop()
+        $script:UpdTimer.Dispose()
+        $script:UpdTimer = $null
+        $res = $null
+        try { $res = $script:UpdPs.EndInvoke($script:UpdAsync) } catch {}
+        try { $script:UpdPs.Dispose() } catch {}
+        $script:UpdPs = $null
+        $script:UpdAsync = $null
+        $btnUpdate.Tag.Checking = $false
+
+        if ($res -and $res.Count -gt 0 -and $res[0].ok) {
+            try {
+                $info = $res[0].json | ConvertFrom-Json
+                if ($info.version -and ((Compare-SemVer $info.version $LocalVersion) -gt 0)) {
+                    $script:RemoteUpdate = $info
+                    $btnUpdate.Tag.HasUpdate = $true
+                    $btnUpdate.Tag.Text = "Update v$($info.version)"
+                    $btnUpdate.Invalidate()
+                    Say "   [+] Update available: v$($info.version) - $($info.notes)"
+                    return
+                }
+            } catch {}
+            $btnUpdate.Tag.Text = "v$LocalVersion"
+            $btnUpdate.Invalidate()
+            if ($interactive) { Say "   [=] wakubp v$LocalVersion is up to date." }
+        } else {
+            $btnUpdate.Tag.Text = "v$LocalVersion"
+            $btnUpdate.Invalidate()
+            if ($interactive) { Say "   [!] Update check unavailable (offline or private repo)." }
+        }
+    })
+    $script:UpdTimer.Start()
+}
+
+$btnUpdate.Add_Click({
+    if ($script:RemoteUpdate) { Invoke-SelfUpdate $script:RemoteUpdate }
+    else { Start-UpdateCheck $true }
+})
+
 # --- menu rows -------------------------------------------------------------------
 $buttons  = New-Object System.Collections.Generic.List[System.Windows.Forms.Button]
 $mainRows = New-Object System.Collections.Generic.List[System.Windows.Forms.Button]
@@ -256,6 +441,7 @@ function Run-Action([scriptblock]$action, [string]$name) {
 }
 
 Update-MenuStatus
+$form.Add_Shown({ Start-UpdateCheck $false })
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 [System.Windows.Forms.Application]::Run($form)

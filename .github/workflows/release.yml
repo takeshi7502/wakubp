@@ -1,0 +1,74 @@
+name: Build & Release wakubp
+
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - "README.md"
+      - "LICENSE"
+      - ".gitignore"
+      - ".gitattributes"
+      - "backup/**"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: ver
+        shell: pwsh
+        run: |
+          $tags = git tag -l "v*" | ForEach-Object { $_.TrimStart('v') } | Where-Object { $_ -match '^\d+\.\d+\.\d+$' }
+          if (-not $tags -or $tags.Count -eq 0) {
+              $next = "1.0.0"
+          } else {
+              $latest = ($tags | Sort-Object { [version]$_ } | Select-Object -Last 1)
+              $v = [version]$latest
+              $next = "$($v.Major).$($v.Minor).$($v.Build + 1)"
+          }
+          $msg = (git log -1 --pretty=%s).Trim()
+          if (-not $msg) { $msg = "Release v$next" }
+          "version=$next" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "notes=$msg"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Next version: $next"
+
+      - name: Build wakubp.exe
+        shell: powershell
+        run: |
+          .\src\build-exe.ps1 -Version "${{ steps.ver.outputs.version }}" -Notes "${{ steps.ver.outputs.notes }}"
+
+      - name: Commit updated version.json
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          if (-not (git diff --cached --quiet)) {
+              git commit -m "chore(release): v${{ steps.ver.outputs.version }} [skip ci]"
+              git push origin HEAD:master
+          }
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.ver.outputs.version }}"
+          $tag = "v$ver"
+          $notes = "${{ steps.ver.outputs.notes }}"
+          gh release create $tag "dist\wakubp.exe" `
+            --title "wakubp $tag" `
+            --notes "$notes" `
+            --target master
+
