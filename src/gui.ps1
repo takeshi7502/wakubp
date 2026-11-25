@@ -43,7 +43,7 @@ function global:Say([string]$m) {
     if ((-not $box) -or $box.IsDisposed) { return }
     $plain = ($m -replace $AnsiRe, "").TrimEnd()
     $color = [System.Drawing.Color]::FromArgb(154, 167, 179)
-    if ($plain -match "INSTALL WAKU|DELETE WAKU|INJECT OPENCODE|REMOVE OPENCODE|INJECT DEEPSEEK|REMOVE DEEPSEEK|INSTALLED & ACTIVE") {
+    if ($plain -match "INSTALL WAKU|DELETE WAKU|DELETE ANTIGRAVITY|INJECT OPENCODE|REMOVE OPENCODE|INJECT DEEPSEEK|REMOVE DEEPSEEK|INSTALLED & ACTIVE") {
         $color = [System.Drawing.Color]::FromArgb(125, 211, 252)
     } elseif ($plain -match "\[\!\]") {
         $color = [System.Drawing.Color]::FromArgb(245, 158, 11)

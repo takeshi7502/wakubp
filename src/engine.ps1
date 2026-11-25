@@ -375,17 +375,26 @@ function Action-Install {
 }
 
 function Action-Delete {
-    Head "DELETE WAKU"
-    if (-not (Confirm "   Confirm deletion? [y/N] " "n")) { Say "   $C_GRAY Cancelled.$C_RESET"; Start-Sleep -Seconds 1; return }
+    Head "DELETE ANTIGRAVITY BYPASS"
+    if (-not (Confirm "   Confirm Antigravity removal? [y/N] " "n")) { Say "   $C_GRAY Cancelled.$C_RESET"; Start-Sleep -Seconds 1; return }
 
     $m = $null
     if (Test-Path -LiteralPath $ManifestPath) { try { $m = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json } catch { $m = $null } }
 
+    $agentTargets = @($OpenCodeAgents, $DshAgents)
+    $agentDirs = @((Split-Path -Parent $OpenCodeAgents), (Split-Path -Parent $DshAgents))
     $restored = 0; $removed = 0
     if ($m) {
+        $agBackups   = @($m.backups | Where-Object { $_ -and $_.backup -and $_.original -and ($agentTargets -notcontains $_.original) })
+        $keepBackups = @($m.backups | Where-Object { $_ -and $_.backup -and $_.original -and ($agentTargets -contains $_.original) })
+        $agCreated   = @($m.created | Where-Object { $_ -and ($agentTargets -notcontains $_) })
+        $keepCreated = @($m.created | Where-Object { $_ -and ($agentTargets -contains $_) })
+        $agDirs      = @($m.createdDirs | Where-Object { $_ -and ($agentDirs -notcontains $_) })
+        $keepDirs    = @($m.createdDirs | Where-Object { $_ -and ($agentDirs -contains $_) })
+
         # Restore oldest last: the earliest backup holds the true pre-install
         # original when the same file was overwritten by several runs.
-        $bl = @($m.backups | Where-Object { $_ -and $_.backup -and $_.original } | Sort-Object -Property backup)
+        $bl = @($agBackups | Sort-Object -Property backup)
         [array]::Reverse($bl)
         foreach ($b in $bl) {
             if (Test-Path -LiteralPath $b.backup -PathType Leaf) {
@@ -397,7 +406,7 @@ function Action-Delete {
                 }
             }
         }
-        foreach ($f in @($m.created)) {
+        foreach ($f in $agCreated) {
             if ($f -and (Test-Path -LiteralPath $f -PathType Leaf)) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; $removed++ }
         }
         $ws = "$($m.workspace)"
@@ -406,40 +415,49 @@ function Action-Delete {
             if ($rm) { Remove-Item -LiteralPath $ws -Recurse -Force -ErrorAction SilentlyContinue; Say "   $C_GREEN[+]$C_GRAY Workspace removed.$C_RESET" }
             else { Say "   $C_GRAY Workspace preserved.$C_RESET" }
         }
-        if (Test-Path -LiteralPath $CoreDir) { Remove-Item -LiteralPath $CoreDir -Recurse -Force -ErrorAction SilentlyContinue }
-        foreach ($d in (@($m.createdDirs) | Sort-Object -Property Length -Descending)) {
+        foreach ($d in ($agDirs | Sort-Object -Property Length -Descending)) {
             if ($d -and (Test-Path -LiteralPath $d -PathType Container)) {
                 $left = @(Get-ChildItem -LiteralPath $d -Force -ErrorAction SilentlyContinue)
                 if ($left.Count -eq 0) { Remove-Item -LiteralPath $d -Force -ErrorAction SilentlyContinue }
             }
         }
+        if (($keepBackups.Count -gt 0) -or ($keepCreated.Count -gt 0) -or $m.opencodeInjected -or $m.dshInjected) {
+            foreach ($b in $agBackups) {
+                if ($b.backup -and (Test-Path -LiteralPath $b.backup -PathType Leaf)) {
+                    Remove-Item -LiteralPath $b.backup -Force -ErrorAction SilentlyContinue
+                }
+            }
+            Get-ChildItem -LiteralPath $CoreDir -Directory -Filter "backup-*" -ErrorAction SilentlyContinue | ForEach-Object {
+                $left = @(Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue)
+                if ($left.Count -eq 0) { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+            }
+            $m.backups = @($keepBackups)
+            $m.created = @($keepCreated)
+            $m.createdDirs = @($keepDirs)
+            $m.antigravityInjected = $false
+            $m.workspace = ""
+            $m.workspaceCreated = $false
+            $m.updatedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+            $m | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ManifestPath -Encoding UTF8
+        } else {
+            if (Test-Path -LiteralPath $CoreDir) { Remove-Item -LiteralPath $CoreDir -Recurse -Force -ErrorAction SilentlyContinue }
+        }
     } else {
-        Say "   $C_AMBER[!]$C_GRAY No manifest found - removing known files (no restore data).$C_RESET"
+        Say "   $C_AMBER[!]$C_GRAY No manifest found - removing known Antigravity files (no restore data).$C_RESET"
         foreach ($d in $DomainFiles) { $p = Join-Path $GlobalGeminiDir "domains\$d"; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue; $removed++ } }
         foreach ($f in $RefFiles) { $p = Join-Path $GlobalGeminiDir "references\$f"; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue; $removed++ } }
         foreach ($p in @((Join-Path $GlobalGeminiDir "rules\GEMINI.md"), (Join-Path $GlobalGeminiDir "GEMINI.md"))) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue; $removed++ } }
-        $ocSrc = Join-Path $PayloadDir $BypassFileName
-        if (Test-Path -LiteralPath $ocSrc -PathType Leaf) {
-            foreach ($pair in @(@{ name = "OpenCode"; path = $OpenCodeAgents }, @{ name = "DeepSeek Harness"; path = $DshAgents })) {
-                if (-not (Test-Path -LiteralPath $pair.path -PathType Leaf)) { continue }
-                try {
-                    if ((Get-FileHash -LiteralPath $pair.path).Hash -eq (Get-FileHash -LiteralPath $ocSrc).Hash) {
-                        Remove-Item -LiteralPath $pair.path -Force -ErrorAction SilentlyContinue
-                        $removed++
-                        Say "   $C_GRAY $($pair.name) AGENTS.md matched payload exactly - removed.$C_RESET"
-                    } else {
-                        Say "   $C_AMBER[!]$C_GRAY $($pair.name) AGENTS.md differs from payload - left untouched.$C_RESET"
-                    }
-                } catch {}
-            }
-        }
         if (Test-Path -LiteralPath $CoreDir) { Remove-Item -LiteralPath $CoreDir -Recurse -Force -ErrorAction SilentlyContinue }
         foreach ($d in @((Join-Path $GlobalGeminiDir "domains"), (Join-Path $GlobalGeminiDir "references"), (Join-Path $GlobalGeminiDir "rules"))) {
             if (Test-Path -LiteralPath $d) { $left = @(Get-ChildItem -LiteralPath $d -Force -ErrorAction SilentlyContinue); if ($left.Count -eq 0) { Remove-Item -LiteralPath $d -Force -ErrorAction SilentlyContinue } }
         }
     }
+    $script:AntigravityInjected = $false
+    $script:Created = @()
+    $script:CreatedDirs = @()
+    $script:Backups = @()
     Say ""
-    Say "   $C_GREEN[+]$C_GRAY waku removed. ($restored restored, $removed removed)$C_RESET"
+    Say "   $C_GREEN[+]$C_GRAY Antigravity removed. ($restored restored, $removed removed)$C_RESET"
     Say ""
     if (-not $AutoYes) { Pause-Return }
 }
