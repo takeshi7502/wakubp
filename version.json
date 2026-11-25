@@ -1,6 +1,6 @@
-{
+﻿{
     "version":  "1.0.0",
-    "notes":  "Initial release",
+    "notes":  "feat: add build script, release workflow, GUI, and version configuration",
     "downloadUrl":  "https://github.com/takeshi7502/wakubp/releases/latest/download/wakubp.exe",
-    "sha256":  "1d60d8f556358e1f933ebadacbf7c968bc07b4b97e6551b650793e80705917f3"
+    "sha256":  "5580e6056aaf720b5c991bf678ce4a8cee4f6234462a87ab6ac68a68841e286b"
 }
